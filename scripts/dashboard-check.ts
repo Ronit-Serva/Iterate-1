@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const base='http://127.0.0.1:4030';
+const page=await fetch(base);assert.equal(page.status,200);assert.ok(page.headers.get('content-security-policy')?.includes("script-src 'self'"));const html=await page.text();const js=fs.readFileSync('apps/dashboard/public/app.js','utf8');const ids=new Set([...html.matchAll(/id="([^"]+)"/g)].map(m=>m[1]));
+for(const m of js.matchAll(/\$\('([^']+)'\)/g))assert.ok(ids.has(m[1]),`Missing DOM element ${m[1]}`);
+assert.ok((await fetch(base+'/style.css')).ok);assert.ok((await fetch(base+'/app.js')).ok);
+const snapshot=await(await fetch(base+'/api/snapshot')).json();assert.ok(snapshot.local.ready&&snapshot.services.server&&snapshot.services.facilitator);
+assert.ok(!JSON.stringify(snapshot).includes('apiKey'));
+const token=await(await fetch(base+'/api/session')).json();assert.ok(token.token);
+const denied=await fetch(base+'/api/runs',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(denied.status,403);
+const invalid=await fetch(base+'/api/runs',{method:'POST',headers:{'content-type':'application/json',origin:base,'x-session-token':token.token},body:'{"task":"short"}'});assert.ok([400,409].includes(invalid.status),'Invalid task must be rejected (or blocked by an active run)');
+const reader=(await fetch(base+'/api/events',{signal:AbortSignal.timeout(5000)})).body!.getReader();const first=await reader.read();assert.ok(new TextDecoder().decode(first.value).includes('data:'));await reader.cancel();
+console.log(JSON.stringify({passed:true,staticAssets:true,domReferences:true,sessionGuard:true,sseReplay:true,servicesHealthy:true,visualQA:'not performed: no browser surface available'},null,2));

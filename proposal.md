@@ -1,190 +1,223 @@
-# Proposal: two-agent task completion through the local A2A–x402 extension
+# Proposal: LLM agents using a modified local A2A–x402 extension
 
-Date: 2026-10-29  
-Status: implementation proposal; no application changes made.  
-Objective: [Objective.md](Objective.md). Implementation root: `../Build`.
+Date: 2026-10-29
+Status: approved design; implementation is now in this root. See [IMPLEMENTATION.md](IMPLEMENTATION.md) for validation and remaining limitations.
+Project and implementation root: **`/home/ronit/Blockchain-Focus/Iterate#1`**.
+Requirements: [Objective.md](Objective.md), amended by the user's instructions that both agents use LLMs and that execution precedes settlement, A2A task polling is used, and interrupted requests are reported as unresolved.
 
-## 1. Outcome and interpretation
+## 1. Required outcome
 
-Extend the working paid statistics prototype into a reproducible experiment in which Agent 1 receives an original task, discovers Agent 2 through an on-chain registry, delegates a necessary subtask through A2A/x402, verifies local-chain payment, and uses the returned result to produce its own final output.
+Build a working local experiment with two LLM-based agents. Agent 1 receives an original task, uses a tool to discover Agent 2 through a local blockchain directory, delegates a subtask, handles an HTTP 402 challenge through payment tools, and uses the paid result to finish the original task. Agent 2 verifies the authorization, executes the request with its LLM, settles only after successful execution, and releases the result only after confirmed settlement.
 
-The existing build already implements most of the transport and payment machinery. The principal additions are a registry lookup, an explicit Agent 1 task workflow, and evidence joining the original task, delegated request, confirmed payment, and composed output.
+The required server ordering is:
 
-Scope decisions:
+**Validate request → challenge → verify payment authorization → execute request → validate and stage result → settle payment → confirm transaction → release result.**
 
-- Use deterministic software agents for this experiment. Objective.md does not require an LLM, autonomous planning, natural-language understanding, or external model credentials. Agent 1 will have an explicit task decomposition and completion policy; Agent 2 remains the statistics specialist.
-- Interpret discovery as the specified one-way lookup: Agent 1 discovers Agent 2. Mutual discovery is unnecessary for the stated flow and success criteria.
-- Add a small, explicit registry contract. The current AgentCard is a single card store at a known address; there is no separate registry. Although that could serve as a one-entry registry, a dedicated registry makes the objective's registry-address bootstrap unambiguous.
-- Treat “local copy of x402” as the pinned packages installed in this project and the separately running local facilitator. There is already real x402 authorization and settlement, with no hosted payment service. Vendoring or independently rewriting the upstream SDK is not required by the objective.
-- Retain settlement before service execution. The objective requires both completion and payment, but does not require delivery before payment. Changing this ordering would weaken the existing payment gate without helping the experiment.
+If execution fails or cannot produce an acceptable result, the server must never submit that request's payment authorization for settlement. This deliberately changes the earlier implementation, which verifies and settles before execution.
 
-## 2. What the current extension actually does
+Both agents use model-generated decisions/output; a fixed statistics function and a deterministic assessment wrapper do not meet this revised scope. Deterministic code still owns protocol validation, signing, budgets, persistence, and payment gates.
 
-This assessment combines the referenced Codex task with direct inspection of the current source. Source is authoritative where older progress notes describe superseded behavior.
+## 2. Existing system and what changes
 
-| Layer | Current implementation | Reuse for this iteration |
+The previous implementation is in `../Build`. It is the source baseline, not the implementation root for this iteration. Its current components include:
+
+| Component in the baseline | Current behavior | Iteration treatment |
 | --- | --- | --- |
-| Local chain | Hardhat, chain ID 31337, loopback RPC | Keep |
-| Card and identity | `contracts/AgentCard.sol` stores A2A JSON, owner and active flag; receives payments; owner can update/withdraw | Keep as Agent 2's card and recipient |
-| Token | `contracts/TestUSD.sol`: 6-decimal ERC-20, restricted minting, EIP-712/EIP-3009 authorization | Keep |
-| Card reader | `packages/shared/src/card.ts` reads `config.agentCard` directly and validates statistics/payment terms | Add registry resolution ahead of this reader |
-| Agent 1 today | `apps/client/src/run.ts` sends numbers and returns Agent 2's response, receipt and balances | Add original-task handling and result composition |
-| Agent 2 | `apps/server/src/service.ts` uses the official A2A SDK executor to calculate count, sum, min, max and mean | Keep the real delegated computation |
-| Payment transport | `apps/client/src/payment.ts` checks the 402 challenge against card terms/budget, signs once, retries with `PAYMENT-SIGNATURE` | Keep |
-| Payment enforcement | `apps/server/src/payment-gate.ts` requires extension activation, binds request/body/payment, settles before invoking the SDK handler | Keep |
-| Facilitator | `scripts/facilitator.mjs`: separate local `/supported`, `/verify`, `/settle` service using x402 SDK and its own gas signer | Keep |
-| Recovery | Deployment-scoped server/facilitator records, nonce deduplication, receipt/event reconciliation | Preserve |
-| Dashboard | Local process controls, manual checkpoints, SSE events, payment evidence and transient signed-payload view | Extend to show the original task and Agent 1's completion |
+| `contracts/AgentCard.sol` | Stores A2A JSON, owner and active flag; receives token payments | Reuse with revised LLM capability description |
+| `contracts/TestUSD.sol` | Six-decimal local ERC-20 with EIP-712/EIP-3009 authorization | Reuse |
+| `packages/shared/src/card.ts` | Reads a known card address; validates statistics skill and fixed payment terms | Resolve through directory; validate Agent 2's new capability |
+| `apps/client/src/run.ts` | Sends numbers and returns statistics | Replace experiment entry with Agent 1's LLM/tool loop |
+| `apps/client/src/payment.ts` | Validates 402 terms, signs, retries | Refactor into tools plus a request-bound payment session |
+| `apps/server/src/service.ts` | Executes deterministic statistics through official A2A SDK | Replace experiment executor with Agent 2's LLM runtime |
+| `apps/server/src/payment-gate.ts` | Verifies and settles before SDK execution | Substantially modify for execute-before-settle and result withholding |
+| `scripts/facilitator.mjs` | Separate local x402 verification and settlement endpoints | Reuse independent endpoints and idempotency; call settlement later |
+| Shared durable state | Request/body/proof association, deployment anchors, cached results | Extend with execution and staged-result states |
+| Dashboard | Process controls, manual checkpoints and payment evidence | Build a redesigned experiment dashboard showing both agents, live communication, A2A tasks and the modified payment lifecycle |
 
-The wire profile is pinned in this build: A2A SDK 1.3.0 / protocol 1.0, JSON-RPC `SendMessage`, `A2A-Extensions`, and x402 core/evm 2.28.0 / v2 `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, `PAYMENT-RESPONSE`. The extension URI is the project's placeholder `https://example.org/a2a/x402`; this is a local integration profile, not a claim of a published standard extension.
+The pinned baseline uses A2A SDK 1.3.0/protocol 1.0 and x402 core/evm 2.28.0/v2. It sends `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, and `PAYMENT-RESPONSE`, with explicit `A2A-Extensions` activation. Preserve these wire mechanics and the existing TestUSD/local-chain profile unless implementation testing reveals a necessary adjustment.
 
-The client currently pays 2 TestUSD to AgentCard; the facilitator supplies native ETH gas. The service reads neither private signer. Successful token transfer, rather than signing or verification alone, unlocks computation.
+The main change belongs in the framework adapter and its execution lifecycle, not in EIP-3009 or token contracts. The facilitator already exposes separate `/verify` and `/settle` operations. Create a project-owned modified copy of the earlier integration; do not edit installed dependency files. Document the new behavior explicitly in the extension description/parameters while retaining an unambiguous extension identifier for the local profile.
 
-## 3. Concrete experiment
+## 3. Make Iterate#1 an independent project
 
-Original task supplied to Agent 1:
+Copy the relevant authored source, contracts, scripts, package manifest/lockfile and configuration from `../Build` into this root. Preserve applicable license notices and record baseline provenance. Keep the earlier project unchanged.
 
-> Assess whether the average of [2, 4, 6] meets a target of 5. Obtain the statistics from Agent 2, then produce an assessment that includes the average, the target, and the shortfall or surplus.
+Do not copy `node_modules`, signer keys, `.git`, deployment manifests, chain state, runtime records, generated artifacts, or old evidence as this iteration's execution evidence. Install dependencies in this root, compile locally, create fresh keys, deploy a fresh fixture, and generate this project's `deployments/local.json` and deployment-scoped runtime records.
 
-Proposed typed input:
+All commands, imports, process working directories, evidence paths and documentation must resolve from Iterate#1. No runtime dependency on a working directory or signer file in `../Build` is acceptable. Add environment configuration documentation for the LLM runtime. Provider selected during implementation: NVIDIA cloud OpenAI-compatible Chat Completions at `https://integrate.api.nvidia.com/v1`, using `mistralai/mistral-large-4-1t-a52b` for both agents and a server-side `NVIDIA_API_KEY`. The adapter uses native fetch, so no additional model SDK dependency is needed.
 
-```json
-{
-  "kind": "assess-average",
-  "numbers": [2, 4, 6],
-  "targetMean": 5
-}
-```
+## 4. Blockchain directory and Agent 1's tools
 
-Agent 1 validates the task and assigns an `originalTaskId`. It resolves the configured Agent 2 key from the registry, reads the resolved AgentCard, checks the statistics capability and payment terms, and sends the existing `{numbers}` data part with a distinct delegated `messageId`. The task envelope need not become an A2A asynchronous Task: the existing standalone blocking `SendMessage` profile is sufficient.
+Add a minimal `contracts/AgentRegistry.sol`: an owner-managed mapping from configured agent keys to AgentCard contract addresses, with registration/update/removal events. Reject invalid registration targets. Keep token custody in AgentCard and enforce its active flag. This is a small directory, not a marketplace or ranking system.
 
-Agent 2 computes `{count:3,sum:12,min:2,max:6,mean:4}` after payment confirmation. Agent 1 validates the returned A2A result and uses its `mean` to calculate:
+Add `packages/shared/src/registry.ts` and extend fixture/manifest/deployment validation with the directory address, Agent 2 key and directory code hash. Anchor state after deployment, registration and seeding. Agent 1 receives the directory bootstrap and lookup key, and obtains the card address and endpoint through a real chain read. Read directory/card consistently at a known block and record provenance. Do not silently replace failed discovery with a hardcoded server URL.
 
-```json
-{
-  "kind": "average-assessment",
-  "observedMean": 4,
-  "targetMean": 5,
-  "meetsTarget": false,
-  "difference": -1,
-  "summary": "The average is 4, which is 1 below the target of 5."
-}
-```
+Agent 1's LLM runtime receives a narrow tool interface, implemented in host code:
 
-This final assessment demonstrates incorporation of the delegated result. Agent 1 must derive it from Agent 2's returned statistics; it must not independently calculate the input mean and substitute that for delegation. Validate finite numeric fields, expected count, and internal consistency of the returned statistics before composition. This is response validation, not proof that an arbitrary remote agent is truthful.
+| Tool | Host-side operation and validation |
+| --- | --- |
+| `lookup_agent_card` | Read directory and card; validate active status, interface, capability and payment terms; return sanitized card and discovery reference |
+| `request_agent` | Send an A2A request to the discovered endpoint using a stable delegated message ID; return a structured response or HTTP 402 challenge reference |
+| `verify_payment_challenge` | Decode the actual `PAYMENT-REQUIRED` header; check version, network, asset, amount, payee, endpoint and remaining budget against trusted configuration/card |
+| `sign_payment` | Load Agent 1's isolated signer and create one EIP-3009 authorization for validated terms; return an opaque session handle and public summary |
+| `retry_with_payment` | Retry the identical nonblocking `SendMessage` with its associated `PAYMENT-SIGNATURE`; receive a Task and use the host-managed `GetTask` polling loop to await completion or report failure/unresolved |
 
-## 4. Required changes and new components
+The LLM decides to invoke the discovery, delegation and payment tools in context. Host code enforces their allowed order and associations; model text cannot override endpoint restrictions, budgets or settlement rules. A combined higher-level tool may wrap these primitives later, but the experiment must retain evidence of the real lookup, 402, signing and paid retry.
 
-### A. Add an explicit on-chain registry
+Private keys and raw signed authorizations are never passed to either LLM or included in its prompts/tool transcript. Keep the authorization in the trusted payment session; the existing optional local transient payload display can remain separate. Treat AgentCards and remote/model responses as data rather than instructions that can alter tool policy.
 
-Add `contracts/AgentRegistry.sol`, using the existing OpenZeppelin ownership pattern:
+### A2A task polling
 
-- `mapping(bytes32 => address)` from a stable configured agent key to an AgentCard address.
-- Owner-only register/update/remove operations and events recording the key and card address.
-- Reject zero-address registration and addresses without deployed code; removal is explicit.
-- No payment custody or token transfer in the registry. AgentCard remains the payee and card-active status remains authoritative.
+Use A2A JSON-RPC over HTTP with `SendMessage` followed by repeated `GetTask` calls. The installed SDK exposes `configuration.returnImmediately: true` and `client.getTask({tenant, id, historyLength})`. The initial message and its paid retry use the same message ID, body and nonblocking configuration. The server creates a task after successful payment verification and returns its server-generated task ID promptly, while execution and settlement continue in the background. The acknowledgement contains no specialist result and does not claim payment has settled.
 
-Add `packages/shared/src/registry.ts` to resolve Agent 2 from the configured registry address and key. Read registry and card at a common block for discovery consistency, validate the card, and return the registry address, key, resolved card address and discovery block/hash as provenance.
+Agent 1's host runtime polls that task using the SDK, initially every two seconds with bounded backoff and an overall deadline. Normal polling belongs to the active delegation tool call and does not require another LLM call on every tick. There is no separate custom status-inspection tool or payment-recovery endpoint in this iteration. A2A task polling is the normal interaction between the agents.
 
-Modify `packages/shared/src/local.ts` and `scripts/m1-local.mjs` to deploy/register Agent 2 and include `registry`, `agent2Id`, and the registry code hash in public deployment metadata. Seed the deployment anchor after registration and fixture setup. Extend stale-deployment checks to the registry.
+Keep the A2A task ID, delegated message ID and original task ID distinct and record their mapping. Polls are read-only: they do not invoke the model, sign a proof, submit a payment, or create another task. Apply the payment challenge to the initial `SendMessage`; do not charge or run the client's 402 payment-signing handler on `GetTask`.
 
-The client must obtain the selected card address from the registry, rather than silently falling back to `config.agentCard`. The existing manifest card address can remain the deployment fixture's expected recipient and a cross-check. A registry entry pointing to another address should fail clearly under this single-agent fixture; supporting arbitrary replacement agents is a later capability.
+Protect task reads using a host-held, request-bound credential established by the client before submission and bound by the server to the accepted task. Return sanitized task status before settlement. Exclude staged model output from artifacts, task history, status messages and metadata until payment confirms. After confirmation, publish the result artifact and mark the task completed. Return `PAYMENT-RESPONSE` on the completed `GetTask` response, including subsequent reads of that completed task; this is part of the project's x402/A2A adapter profile and must be documented. The client must capture that response header on task polls and independently verify the receipt.
 
-Update `card.ts` to accept the explicitly resolved card address when reading and validating the payee. Preserve the current exact token/network/price checks. The service and facilitator can retain their fixture-bound recipient configuration.
+If submission acknowledgement is lost, polling fails, the deadline expires, a process restarts, or an A2A interrupted state requires further input/authentication, stop the client workflow and report **unresolved** with known IDs/hash. Do not automatically resubmit `SendMessage`, resume a lost session, rerun execution or authorize another payment. A server task may continue after the client stops; unresolved does not imply failure, cancellation or absence of payment. Definitive task failures observed during normal polling are reported as failures.
 
-### B. Turn the client into Agent 1's workflow
+This uses the installed A2A 1.0 profile, whose SDK declarations were checked locally. See the official [A2A task interaction specification](https://a2a-protocol.org/v1.0.1/specification/) for the nonblocking submission and Get Task polling pattern; implementation must retain the pinned SDK's actual wire serialization.
 
-Add `packages/shared/src/experiment.ts` for typed original tasks, delegated-result validation, and final assessment construction. Keep SDK result parsing in a clear adapter using the installed SDK's response representation.
+## 5. Both LLM agents and the experiment task
 
-Add `apps/client/src/agent1.ts` to own this sequence:
+Add a shared provider adapter and bounded model/tool loop, with separate Agent 1/Agent 2 system prompts, model configuration, timeouts, token limits and explicit failure states. Both runtimes must invoke an actual LLM in the live experiment. Model credentials remain in server-side environment configuration and are excluded from evidence and browser responses. Local payment does not imply local model inference; hosted or local inference is a configuration choice to document.
 
-1. Validate the original task and allocate its ID.
-2. Resolve/read Agent 2 from the registry.
-3. Allocate a delegated request ID and record the relationship to the original task.
-4. Execute one paid A2A call through the existing transport.
-5. Validate the successful A2A response and confirmed payment evidence.
-6. Compose and return the final assessment using the delegated statistics.
+Suggested initial task for Agent 1:
 
-Refactor `run.ts` so its paid-call helper accepts a discovered, validated card and resolved deployment context. Retain a compatible `runPaid(numbers, requestId)` wrapper for existing CLI/regression callers. Add an `experiment` CLI entry and npm script accepting the typed original-task JSON; preserve the existing direct statistics demo.
+> Write a recommendation for a small team choosing between two proposed approaches. Ask the specialist agent to evaluate their risks and tradeoffs, then combine its assessment with the team's priorities to make your final recommendation.
 
-Keep correlation in the application record rather than introducing A2A `taskId` or `contextId`: the current payment gate deliberately rejects those fields. The delegated `messageId` remains the durable server/payment identity.
+Supply the two approaches, priorities and constraints as task input so the experiment does not need web research. Agent 1 uses the discovered specialist capability to formulate a delegated request. Agent 2 uses its LLM to produce a structured assessment containing a summary, tradeoffs, risks and limitations. Agent 1 receives that assessment only after settlement and uses it in its final model-generated recommendation.
 
-### C. Keep Agent 2 and payment enforcement focused
+Define bounded request/result schemas and validate Agent 2's structured output before declaring execution successful. Timeouts, provider exceptions, refusals, malformed output and explicit inability to perform the task count as execution failure and do not trigger settlement. A bounded repair attempt can remain within the same execution attempt; it cannot silently create another paid request. Schema checks establish acceptable completion for this experiment, not universal correctness of LLM answers.
 
-Agent 2 already provides the required specialist task; no new service, model backend, or extra agent process is needed. Agent 1 is the client process with the new workflow; Agent 2 is the existing server process.
+Evidence must show Agent 1 consumed Agent 2's result in its final model call, and retain the returned final output. Exact prose is not an acceptance oracle: model behavior is nondeterministic and identical inputs may yield different answers.
 
-Preserve challenge validation, budget enforcement, extension activation, settle-before-execute behavior, and request/proof association. Add structured correlation events around discovery, delegation, result receipt, and final composition. Never log the complete signed proof as persistent evidence.
+## 6. Modify the server framework lifecycle
 
-Do not add registry policy to the facilitator. It should continue verifying and settling the configured payment terms. EIP-3009 authorizes a token transfer and does not sign the original task or delegated body; the experiment's correlation record must describe that association accurately.
+Restructure `payment-gate.ts` and `service.ts` around an internal execution result instead of settling before calling the current SDK handler. Proposed responsibilities:
 
-### D. Produce one complete evidence artifact
+1. Validate the request, extension activation, identity, body hash and payment association before execution.
+2. For an unpaid request, return the actual 402 challenge without invoking Agent 2's LLM.
+3. For a signed retry, call facilitator `/verify` and reject invalid proofs without invoking the model. Verification must not consume the nonce or transfer tokens.
+4. Bind the verified authorization and polling credential to the delegated request, create/persist an A2A Task, and return its ID promptly. Schedule one background execution attempt; the HTTP request ending must not terminate that attempt.
+5. Run Agent 2, validate success, and durably stage its result before any settlement submission.
+6. On execution failure, record `execution-failed` and mark the A2A task failed; do not call `/settle`. Subsequent polls return a sanitized failure without a successful payment receipt.
+7. On execution success, recheck authorization validity and call `/settle` for that request's verified proof.
+8. Independently confirm the transaction/expected token events. Only then publish the staged result as an A2A task artifact, mark the task completed, and include `PAYMENT-RESPONSE` on completed task reads.
 
-Add `packages/shared/src/experiment-evidence.ts` and a verifier/check script. Write a sanitized `evidence/iteration-1-result.json` containing:
+Do not let the SDK executor publish model output directly to the HTTP response/event bus before settlement. Implement an internal execution/staging layer and publish the A2A result after confirmation. Disable streaming and push delivery for the experiment; buffering only `res.json` is insufficient if other writes can leak output. Do not depend on a late response interceptor to enforce payment.
 
-- Experiment ID, original task ID and typed input.
-- Registry address, agent key, resolved card address, discovery block/hash and deployment anchor.
-- Delegated request ID, delegated input and returned statistics.
-- Chain ID, token, payer, payee, amount in base units and payment transaction hash.
-- Independently queried successful receipt and decoded `AuthorizationUsed` / matching `Transfer` evidence.
-- Final Agent 1 assessment and completion status.
+Expose the changed semantics in card metadata, documentation and dashboard labels. The original settle-before-execute execution-count guard must change: execution now requires a verified, request-bound authorization, whereas delivery requires confirmed settlement. These are separate invariants.
 
-Use the delegated request ID to join the server's durable record and recorded receipt to the artifact. Check token address, payer, AgentCard payee and exact amount, rather than accepting any successful transaction. Record observed ordering so settlement precedes Agent 2 execution and Agent 1 composition follows the returned result. Application events establish workflow ordering; chain receipts establish payment.
+Replace the baseline `InMemoryTaskStore` with a durable task store linked to request/payment records. Permit `GetTask` in routing and implement nonblocking submission instead of rejecting `returnImmediately`. Keep the experiment restricted to one submitted subtask per payment; arbitrary follow-up messages on a task remain outside scope. Release submission locks after task creation so polling can proceed during model execution; use per-task execution/payment locks to prevent duplicate workers.
 
-No private keys, signatures or complete authorizations go into the artifact. On failure, record the actual stage and any known transaction hash; a paid-but-undelivered result must not be presented as experiment success. Pending/unknown payment cannot produce a successful final assessment.
+Map accepted/queued work to A2A `TASK_STATE_SUBMITTED`, execution and settlement to `TASK_STATE_WORKING`, confirmed payable completion to `TASK_STATE_COMPLETED`, and definitive execution or settlement failure to `TASK_STATE_FAILED`. Payment phases remain internal/extension metadata; do not invent additional A2A task states. Report unknown/interrupted outcomes to Agent 1 as unresolved without claiming completion. Keep staged output private even though computation has finished.
 
-`evidence/` is currently ignored by Git. Runtime generation and a documented location suffice for this local experiment; selectively tracking sanitized evidence would be a separate repository decision.
+Proposed durable internal states:
 
-### E. Extend the existing walkthrough
+`verified → executing → execution-succeeded → settling → settlement-pending → settled → delivered`
 
-Modify `apps/dashboard/src/index.ts`, `apps/dashboard/public/app.js`, `index.html`, and shared walkthrough events to accept the target alongside numbers, show the original task, registry lookup, delegated result and final assessment, and retain payment evidence.
+Terminal/exception branches include `execution-failed`, `execution-unknown`, and `settlement-failed`. A result may be staged and unpaid; it must never be returned as a successful delegated result in that state. Store request ID, A2A task ID/context ID, polling credential hash, body hash, payment fingerprint, execution attempt ID, result/status and known transaction hash under the deployment namespace.
 
-Keep the dashboard's existing paid-retry transient view and signer isolation. Add the target/task kind and original/delegated IDs to its bounded public run summary as needed. Do not persist the signed payload to support the new workflow.
+## 7. Failure, expiration and retry behavior
 
-Keep existing controls and direct CLI compatibility. For the new experiment path, add an explicit final composition stage after Agent 2's response. Existing 60-second checkpoint limits still apply; a timed-out or canceled workflow must not silently start another payment.
+| Condition | Required behavior |
+| --- | --- |
+| Invalid authorization or challenge | Reject before LLM execution; no settlement |
+| LLM execution fails | Record failure; never submit that authorization for settlement; no token transfer by this framework |
+| Execution succeeds but settlement fails | Retain staged result; withhold result; report payment failure without claiming delivery |
+| Settlement pending/unknown | Withhold result while the active server worker checks its existing transaction; client polls within its deadline, then reports unresolved; never submit another payment automatically |
+| Poll response or task acknowledgement lost | Stop the interrupted client workflow and report unresolved with known IDs/hash; do not resubmit, pay again or automatically resume |
+| Process crash after staged-result persistence | Preserve records and private staged result for evidence; report the interrupted request as unresolved; automatic recovery/resumption is deferred |
+| Crash during model execution before result persistence | Mark execution unknown; do not automatically rerun a nondeterministic request or charge without a staged successful result |
+| Duplicate concurrent paid requests | Serialize by request/payment identity; perform at most one execution attempt in the running process and one token settlement |
+| Same request ID with a different body/proof | Reject conflict unless using a separately designed, explicit replacement-authorization transition |
 
-## 5. Delivery sequence and verification gates
+Payment authorization lifetime must accommodate bounded model execution and any manual pauses. The previous 300-second profile and fixed walkthrough timeouts need review together across card requirements, client validation and facilitator checks. Start execution only with sufficient validity remaining, and recheck before settlement. Verification reserves no funds: the payer can still spend its balance or cancel an authorization during execution.
 
-| Phase | Deliverable | Acceptance gate |
-| --- | --- | --- |
-| 1 | Registry, manifest, resolver and fixture changes | Authorized registration resolves correctly; missing/removed entry, inactive card, unauthorized update and stale-chain registry are rejected |
-| 2 | Agent 1 task workflow and CLI | Real discovery and paid delegation produce the expected assessment for [2,4,6], target 5 |
-| 3 | Joined evidence and independent receipt verification | Original/delegated IDs, matching token transfer and final output are present in one artifact |
-| 4 | Dashboard experiment flow | User supplies original task, observes registry discovery/delegation/payment and receives Agent 1's assessment |
-| 5 | Reproduction and documentation | Fresh local run succeeds; existing paid flow and recovery checks remain valid |
+If the authorization expires after successful execution, keep the result withheld and report that payment could not complete. For the first iteration, do not automatically request a new signature or rerun the model. A later explicit replacement-authorization flow would need conflict rules linking the new proof to the same staged result.
 
-Add `scripts/iteration1-check.ts` and a proposed `npm run iteration1:check`. Make the experiment part of `scripts/reproduce.mjs` after existing M0–M7 gates, with a known fixture balance or explicitly measured before/after balances. Extend existing scripts only where the registry/schema changes affect their assumptions; `scripts/compile.mjs` already discovers Solidity files automatically.
+Keep raw proofs in memory only, as in the current privacy design. The background server worker retains its accepted proof only for the bounded active task, until settlement or terminal failure. A crash may lose it; mark the affected request unresolved and do not automatically resume it. Preserve durable records for evidence and duplicate prevention, without introducing persistent proof storage. The polling credential grants access to the accepted task during the live workflow; it does not authorize a token transfer or a new execution. Recovery after interruption is deferred.
 
-Meaningful new checks:
+“Authorization never used on execution failure” means this framework never submits it for settlement. A signed EIP-3009 authorization remains valid until expiry/cancellation; verification alone does not revoke it. Do not promise cryptographic cancellation merely because application execution failed. Discard the in-memory proof on terminal failure; add on-chain cancellation only if separately required.
 
-- The happy path charges exactly once and produces mean 4, meetsTarget false, difference -1.
-- The final output changes when the returned statistics change; malformed or failed delegated responses cannot yield success. A focused response-adapter test can establish this dependency, alongside the real integration path.
-- Invalid original input fails before signing/payment; unavailable registry/card/service fails with a clear stage.
-- Reusing a payment for a conflicting delegated request is rejected; same-request retry behavior remains consistent with the existing gate.
-- Verification failure or pending settlement never runs Agent 2; payment confirmation followed by service failure remains paid-undelivered and produces no successful assessment.
-- Registry or manifest tampering/stale chain state fails before delegation.
-- Artifact transaction tampering is detected by independent receipt/event checks.
-- Public evidence and run histories contain no signer secrets or signed payloads.
+This ordering deliberately exposes Agent 2 to computation cost before settlement succeeds. There is no atomic exchange or guaranteed payment for successful computation; escrow or a new payment contract is outside the requested modification.
 
-Run compilation, typechecking, the new experiment integration check, and the existing reproduction/recovery suite. Update `ui-check.mjs` for the additional input/stages and run it against the revised dashboard. Perform rendered browser verification of the new controls and evidence display. Existing recorded checks are historical evidence: later privacy/theme and recent fixes were not all reverified, so their prior pass status is not proof of this iteration.
+## 8. Files and additional components
 
-## 6. Boundaries and completion criteria
+All paths below are relative to Iterate#1 after baseline source is copied:
 
-No additional LLM service, browser wallet, hosted facilitator, public testnet, new payment scheme, escrow/refund contract, marketplace, or multi-agent planner is necessary. Existing pinned dependencies should cover the proposed additions. Public-chain operation and generalized agent replacement would require further work beyond this objective.
+| Area | Planned files/change |
+| --- | --- |
+| Project setup | `package.json`, lockfile, TypeScript/Hardhat config, `.gitignore`, `.env.example`, root README; independent install and deployment |
+| Directory | New `contracts/AgentRegistry.sol`, `packages/shared/src/registry.ts`; modify `local.ts`, `card.ts`, fixture script |
+| LLM runtime | New `packages/llm/src/provider.ts`, `runtime.ts`, shared schema/config; separate agent prompts |
+| Agent 1 | New `apps/client/src/agent1.ts`, `tools.ts`, experiment CLI entry and host-managed `GetTask` loop; refactor `run.ts` and `payment.ts` for nonblocking submission and receipt capture on polls |
+| Agent 2 | Modify `apps/server/src/service.ts`; add execution/result staging module and LLM-backed specialist executor |
+| Modified framework | Rewrite lifecycle in `payment-gate.ts`; add durable A2A task store, background workers, `GetTask` routing/access control, private staging and duplicate prevention |
+| Facilitator | Preserve independent SDK verify/settle; adjust validity profile only if needed; retain idempotent transaction reconciliation |
+| Evidence | New experiment record writer/verifier and `scripts/iteration1-check.ts` |
+| Dashboard | Redesign `apps/dashboard` frontend and backend; add shared sanitized event schemas, live event transport, agent panels, protocol timeline, task polling view and payment/evidence inspector |
+| Regression | Adapt lifecycle-sensitive checks and add independent live-LLM experiment reproduction |
 
-Preserve the current limitation that an interrupted client cannot automatically replay a discarded signed proof. Do not promise exactly-once external side effects or atomic payment-and-delivery. The final workflow is successful only after both confirmed payment and a validated delegated result incorporated into Agent 1's final assessment.
+Preserve useful token, card, nonce, chain-reset, signer-isolation and transaction-recovery checks. Tests asserting “settlement before execution” must be replaced for this modified profile; running the old M0–M7 suite unchanged would not validate the new architecture. The original project remains available as the reference for the earlier ordering.
 
-The iteration is complete when a fresh local experiment demonstrably follows all five steps in Objective.md and its evidence artifact records the delegated request ID, independently verified payment transaction hash, and Agent 1's final output. This proposal is based on source inspection; implementation and new execution checks remain to be done.
+### Web dashboard for the whole experiment
 
-## 7. Source map
+Build a polished web dashboard as a required deliverable of this iteration. It must let a viewer understand what both LLM agents are doing, how they communicate, and how the extended A2A protocol controls execution, payment and result delivery during an actual run. Reuse the baseline's useful process controls and event infrastructure, but redesign the interface around this experiment rather than retaining a statistics-demo layout.
 
-- [Objective](Objective.md)
-- [Current build instructions](../Build/README.md)
-- [Protocol and evolution decisions](../Build/DECISIONS.md), especially D004, D007–D011
-- [Card validation and payment terms](../Build/packages/shared/src/card.ts)
-- [Current client workflow](../Build/apps/client/src/run.ts) and [payment transport](../Build/apps/client/src/payment.ts)
-- [A2A service](../Build/apps/server/src/service.ts) and [payment gate](../Build/apps/server/src/payment-gate.ts)
-- [Local facilitator](../Build/scripts/facilitator.mjs)
-- [AgentCard contract](../Build/contracts/AgentCard.sol) and [TestUSD](../Build/contracts/TestUSD.sol)
-- [Deployment validation](../Build/packages/shared/src/local.ts), [fixture setup](../Build/scripts/m1-local.mjs), and [durable state](../Build/packages/shared/src/store.ts)
-- [Dashboard backend](../Build/apps/dashboard/src/index.ts), [integration check](../Build/scripts/ui-check.mjs), and [reproduction runner](../Build/scripts/reproduce.mjs)
-- Referenced Codex task `01a172ba-75c3-73d1-9940-43afd8e83ee5`, read through `read_thread`; recent messages establish context for the existing dashboard and client fixes.
+Use a clear visual hierarchy: a compact run header with the current phase and infrastructure health, two prominent agent workspaces, a central communication timeline, and expandable protocol/payment details. Establish consistent typography, spacing, restrained colors and accessible status indicators. Give each agent a stable visual identity, label statuses in text as well as color, support keyboard navigation and reduced motion, and adapt the layout to narrower screens. Animation should indicate observed activity; it must not simulate progress or invent agent behavior.
+
+The dashboard must include:
+
+| View | Required behavior |
+| --- | --- |
+| Experiment controls and overview | Enter the original task and constraints, start a run, see chain/registry/server/facilitator/model configuration readiness, and follow the original task ID and overall status. Distinguish starting a fresh run from viewing an existing run; never silently resubmit an interrupted delegation. |
+| Agent 1 workspace | Show its task, model identifier, current activity, public tool calls and sanitized results: directory lookup, card discovery, delegation, challenge validation, signing summary, paid retry, polling, result receipt and final response. Show actual model-call start/end and available usage/latency without exposing hidden reasoning. |
+| Agent 2 workspace | Show request acceptance, authorization verification, model execution, output-validation status, private result staged, settlement pending/confirmed, and result publication. Before settlement, show only execution status and safe timing/usage summaries; reveal its assessment only after the delivery gate opens. |
+| Live communication and protocol timeline | Render a sequence view with Agent 1, registry/local chain, Agent 2 and facilitator lanes. Connect the observed directory/card reads, unpaid `SendMessage`, HTTP 402, paid retry, verification, Task acknowledgement, repeated `GetTask`, execution, settlement and completed Task delivery. Highlight the current event and let the viewer select earlier events. Collapse repetitive polls while retaining their count, timestamps and individual details. |
+| A2A/x402 inspector | Display message/task/context IDs, extension activation, actual method names, HTTP statuses, safe challenge terms and sanitized request/response envelopes. Show A2A task state separately from execution/payment phases, with the relationship made explicit. Display signing as an authorization-created event with a public summary, never the raw `PAYMENT-SIGNATURE`. |
+| Payment and evidence | Show configured price, asset/network/payee, observed balances, authorization validity, verification outcome, settlement submission, transaction hash, confirmation and receipt checks. Link each payment to its delegated message and A2A task. Provide the sanitized experiment evidence for download and show Agent 1's final output alongside the released specialist result. |
+| Failure and interruption | Explain the failed phase using sanitized errors. Clearly distinguish execution failure with no settlement, settlement failure with withheld output, and unresolved interruption. Retain known IDs/hash and the last observed state; do not infer that an unresolved request is unpaid or canceled. |
+
+Instrument the actual host tools, A2A adapter, task store, model runtime and facilitator with a shared event contract. Each event carries its run/task correlation, source, event ID, source sequence and timestamp, plus an allowlisted payload. Preserve causal links and source ordering rather than claiming timestamps establish a perfect total order across processes. The UI must consume real events and snapshots, including idle, pending, failed and disconnected states, rather than advancing a scripted walkthrough independently of backend work.
+
+Use a backend-to-browser event stream, such as the existing SSE mechanism, with bounded history and event-ID deduplication. This dashboard transport is separate from **Agent 1's A2A `GetTask` polling**, which remains the agent interaction method; label that distinction in the protocol view. Reconnecting the browser may restore its sanitized view of the existing run, but must not restart an agent workflow, resume an interrupted payment session or create new payments. Surface event gaps/disconnection and refresh a read-only snapshot when needed. Keep process-local manual checkpoints optional, explicit and compatible with authorization expiry; the ordinary run should complete without clicking through each protocol step.
+
+Enforce privacy and delivery rules on the dashboard backend before events reach the browser. Browser feeds, snapshots, logs and downloadable evidence must exclude credentials, keys, raw signed proofs, hidden reasoning and the private staged result. Do not send withheld content to the browser and merely hide it in the UI. Reuse bounded sanitized public history and isolated signer processes; expose only fixed, validated experiment controls through the local dashboard API.
+
+Implement the dashboard alongside backend event instrumentation, then finish its layout and interactions once the end-to-end lifecycle works. Browser verification must cover a real successful run, execution failure without settlement, settlement pending/failure with withheld content, and unresolved interruption. Check that agent panels and the timeline match actual events, polling remains visible without overwhelming the view, reconnecting does not trigger work, and pre-settlement payloads contain no staged output. Visually review desktop and narrow layouts, loading/empty/error states, keyboard focus and readable status labels. A static mockup alone does not satisfy this deliverable.
+
+## 9. Evidence, verification and completion
+
+Write a sanitized `evidence/iteration-1-result.json` containing the original task/ID, directory/card provenance, delegated request/ID, A2A task ID, polling events and terminal/unresolved status, selected model identifiers, bounded public tool events, Agent 2's assessment, payment transaction hash, independently checked receipt/token events, and Agent 1's final output. Record token usage where available, but never credentials, keys, raw signed payment proofs or hidden model reasoning.
+
+The observed event sequence must show:
+
+`directory lookup → unpaid nonblocking SendMessage → HTTP 402 → challenge validation → signing → paid retry → verification → Task acknowledgement → GetTask polling during execution/settlement → confirmed settlement → completed Task with result artifact and payment receipt → Agent 1 final output`.
+
+Server events additionally establish `LLM execution success → private result staged → settlement submitted → confirmed → artifact published`. Polling and server work interleave; evidence must not imply every intermediate state was observed by a poll.
+
+Protocol/state-machine tests should use controllable model adapters to inject failures and verify exact payment/delivery invariants. The final experiment must additionally run both real LLMs; mocks do not satisfy the objective. Evaluate live success using schema validity, actual delegation, payment evidence and observable result incorporation rather than exact generated text.
+
+Required checks include execution failure with no `/settle` invocation, unchanged token balances and unused nonce; no result leakage before confirmation; settlement failure/pending after successful execution; duplicate submissions without duplicate work; polls that neither charge nor execute; durable message/task association; task ownership enforcement; no unpaid content in history/artifacts/metadata; lost responses and polling deadline reported as unresolved without automatic resubmission; expired authorization; crash with staged-result preservation and no automatic resumption; executing-state crash without automatic model rerun; registry/deployment mismatch; and secret-free evidence. Update browser integration and visually verify the new order and status labels.
+
+Delivery order: independent project setup → directory/fixture → model adapter and both agents → modified execution/payment lifecycle and A2A task polling, with shared dashboard event instrumentation → evidence/unresolved reporting → dashboard integration and visual refinement → full verification. The provider/model configuration is now selected: NVIDIA-hosted Mistral Large 4 for both agents. The architecture and payment ordering are fixed by the user's revision.
+
+Completion requires one fresh live run from Iterate#1 in which both agents invoke LLMs, Agent 1 discovers Agent 2 through its blockchain tool, the delegated task succeeds before settlement, Agent 1 polls the returned task through `GetTask`, a real local token payment confirms before result release, and Agent 1 incorporates that result into its final response. A separate controlled failure run must demonstrate that unsuccessful execution never consumes its authorization through this framework.
+
+Completion also requires the working web dashboard to display that live run: both agents' observed activities, their A2A communication and polling, the verify–execute–settle–release sequence, payment evidence and final output. Its failure/unresolved views, delivery privacy and responsive visual design must pass the browser checks above.
+
+## 10. Baseline source references
+
+These links identify the earlier implementation inspected for this proposal; the planned project will contain its own modified copies.
+
+- [Baseline README](../Build/README.md) and [decisions](../Build/DECISIONS.md)
+- [Client flow](../Build/apps/client/src/run.ts) and [payment transport](../Build/apps/client/src/payment.ts)
+- [Service executor](../Build/apps/server/src/service.ts) and [payment gate](../Build/apps/server/src/payment-gate.ts)
+- [Facilitator](../Build/scripts/facilitator.mjs), [durable storage](../Build/packages/shared/src/store.ts), and [deployment validation](../Build/packages/shared/src/local.ts)
+- [Card validation](../Build/packages/shared/src/card.ts), [AgentCard](../Build/contracts/AgentCard.sol), and [TestUSD](../Build/contracts/TestUSD.sol)
+- [Dashboard](../Build/apps/dashboard/src/index.ts), [UI check](../Build/scripts/ui-check.mjs), and [reproduction runner](../Build/scripts/reproduce.mjs)
+- Referenced Codex task `01a172ba-75c3-73d1-9940-43afd8e83ee5`, previously read through `read_thread` for baseline context.

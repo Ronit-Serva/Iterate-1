@@ -1,0 +1,15 @@
+node_modules/
+artifacts/
+cache/
+runtime/
+a2a-x402-local/
+evidence/
+.env
+.env.*
+!.env.example
+local.json
+DECISIONS.md
+iterate.md
+PROGRESS.md
+WALKTHROUGH.md
+PAPER_COMPARISON.md

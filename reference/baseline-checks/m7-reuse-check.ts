@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { assertDeployment, deployment, type Deployment } from '../packages/shared/src/local.js';
+import { statePath } from '../packages/shared/src/store.js';
+const prior: Deployment = JSON.parse(fs.readFileSync('evidence/M6-prior-deployment.json', 'utf8'));
+const current = deployment();
+assert.equal(prior.token, current.token, 'Clean Hardhat restarts should reuse the deterministic token address in this check');
+assert.equal(prior.agentCard, current.agentCard);
+await assert.rejects(assertDeployment(prior), /Stale/);
+await assertDeployment(current);
+assert.notEqual(statePath(prior, 'requests'), statePath(current, 'requests'));
+console.log('Reused addresses and matching bytecode do not bypass the deployment block anchor.');
