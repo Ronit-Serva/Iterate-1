@@ -56,6 +56,9 @@ export function createPaymentGate(config: Deployment, options: GateOptions = {})
       }
       transition(r, 'settled');
       transition(r, 'delivered', TaskState.TASK_STATE_COMPLETED);
+      // The assessment can enter the public activity stream only after the
+      // independently confirmed payment opens the delivery gate.
+      event('agent2', 'agent-text', r.runId, { output: r.stagedResult }, { messageId: r.messageId, taskId: r.id });
     } catch { r.error = 'Server execution interrupted'; transition(r, 'unresolved', TaskState.TASK_STATE_UNSPECIFIED); }
   }
   // Serialize acceptance only, never the background model/settlement work or polls.

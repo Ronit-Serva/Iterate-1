@@ -1,5 +1,17 @@
 const $ = id => document.getElementById(id);
 let session, snapshot, selected, selectedEvent;
+async function loadCard() {
+ $('card-location').textContent='Loading the card from the local chain…';
+ $('card-message').textContent='';
+ try {
+  const response=await fetch('/api/card',{signal:AbortSignal.timeout(8000)});
+  if(response.status===404)throw new Error('The running dashboard backend predates the card viewer. Restart the dashboard backend to enable on-chain lookup. You can open the server’s published card using the link below.');
+  if(!response.headers.get('content-type')?.includes('application/json'))throw new Error('The dashboard returned an unexpected response. Restart its backend and refresh this page.');
+  const body=await response.json();if(!response.ok)throw new Error(body.error||'Card lookup failed.');
+  $('card-location').textContent=`Contract ${body.address} · Registry ${body.registry} · Block ${body.blockNumber} · ${body.active?'Active':'Inactive'} · Hash ${body.hash}`;
+  $('card-json').textContent=JSON.stringify(body.card,null,2);
+ } catch(e) { $('card-location').textContent='On-chain card lookup unavailable';$('card-message').textContent=e.name==='TimeoutError'?'Card lookup timed out. Check that the local chain is running, then click Refresh card.':e.message; }
+}
 const events = new Map();
 const labels = {
  'run-started':['Agent 1 begins','Agent 1 → model'], 'model-start':['Model call started','LLM inference'], 'model-end':['Model call completed','LLM response'],
@@ -15,7 +27,8 @@ const labels = {
  'result-received':['Paid specialist result received','Agent 2 → Agent 1 · artifact + receipt'], 'run-completed':['Final recommendation ready','Agent 1 → user'],
  'execution-failed':['Execution failed · no settlement','Agent 2 · authorization unused by framework'], 'settlement-failed':['Settlement failed · output withheld','Agent 2 · result remains private'],
  'unresolved':['Request outcome unresolved','Agent 2 · no automatic recovery'], 'run-failed':['Experiment failed','Workflow stopped'], 'run-unresolved':['Interrupted · unresolved','No automatic retries or payments'],
- 'tool-start':['Tool invoked','Agent 1 → host tool'], 'tool-end':['Tool completed','Host tool → Agent 1']
+ 'tool-start':['Tool invoked','Agent 1 → host tool'], 'tool-end':['Tool completed','Host tool → Agent 1'],
+ 'agent-tool-call':['Agent 1 calls a tool','Client agent → host tool'], 'agent-tool-response':['Tool response returned','Host tool → client agent'], 'agent-text':['LLM generated text','Agent response']
 };
 const money = n => n === undefined ? '—' : (Number(n)/1e6).toFixed(2)+' USD';
 const friendly = s => (s||'').replaceAll('-',' ').replace('TASK_STATE_','').replaceAll('_',' ');
@@ -44,6 +57,17 @@ function render() {
   $(''+a+'-dot').classList.toggle('active',Boolean(run?.status==='running' && last && last.type!=='model-end' && last.type!=='delivered'));
   const lastUsage = list.filter(e=>e.source===a&&e.type==='model-end').at(-1);
   $(''+a+'-usage').textContent=lastUsage ? `${(lastUsage.data.durationMs/1000).toFixed(1)}s${lastUsage.data.usage?.total_tokens?` · ${lastUsage.data.usage.total_tokens} tok`:''}` : '—';
+  const feed = $(a+'-feed');
+  const activity = list.filter(e=>e.source===a && !['tool-end','task-poll','task-read'].includes(e.type));
+  feed.replaceChildren(...(activity.length ? activity.map(e=>{
+   const card=node('article',undefined,`feed-item ${e.type==='agent-text'?'generated-text':''} ${e.type.includes('tool')?'tool-item':''}`);
+   const title = e.type==='agent-text' ? 'LLM response' : e.type==='agent-tool-call' ? `Tool call · ${e.data.tool}` : e.type==='agent-tool-response' ? `Tool response · ${e.data.tool}` : e.type==='tool-start' ? `Tool running · ${e.data.tool}` : e.type==='model-start' ? 'LLM inference started' : e.type==='model-end' ? `LLM turn complete · ${e.data.response?.finishReason||'response'}` : e.type==='model-error' ? 'LLM request failed' : labels[e.type]?.[0]||friendly(e.type);
+   card.append(node('div',title,'feed-title'),node('time',new Date(e.timestamp).toLocaleTimeString([], {hour12:false}),'feed-time'));
+   let payload = e.data.output ?? e.data.input ?? e.data.request;
+   if (e.type==='model-end' && !payload) payload={textProduced:e.data.response?.hasText,toolCalls:e.data.response?.toolCalls,usage:e.data.usage};
+   if (payload!==undefined) card.append(node(typeof payload==='string'?'p':'pre',typeof payload==='string'?payload:JSON.stringify(payload,null,2),'feed-content'));
+   return card;
+  }) : [node('p',a==='agent1'?'The coordinator\'s model turns and tool calls will appear here.':'The specialist\'s work and delivered response will appear here.','muted') ]));
  }
  let phaseIndex=-1;
  for(const e of list) { const i=({verified:0,executing:1,'execution-succeeded':1,settling:2,'settlement-pending':2,settled:2,delivered:3})[e.type]; if(i!==undefined)phaseIndex=Math.max(i,phaseIndex); }
@@ -79,6 +103,8 @@ function render() {
 }
 async function refresh() { try { const r=await fetch('/api/snapshot');if(!r.ok)throw new Error();snapshot=await r.json();if(!selected&&snapshot.runs.length)selected=snapshot.runs[0].id;if(!$('task').value)$('task').value=snapshot.sampleTask;render();}catch{$('connection').textContent='Snapshot unavailable';$('connection').className='connection';} }
 $('setup-button').onclick=()=>{const expanded=$('setup').hidden;$('setup').hidden=!expanded;$('setup-button').setAttribute('aria-expanded',String(expanded));};
+$('card-reload').onclick=()=>{ $('card-message').textContent='';loadCard(); };
+loadCard();
 $('start').onclick=async()=>{
  $('start').disabled=true;$('action-error').textContent='';
  try{const r=await fetch('/api/runs',{method:'POST',headers:{'content-type':'application/json','x-session-token':session},body:JSON.stringify({task:$('task').value})});const body=await r.json();if(!r.ok)throw new Error(body.error);selected=body.id;selectedEvent=undefined;await refresh();}catch(e){$('action-error').textContent=e.message;await refresh();}

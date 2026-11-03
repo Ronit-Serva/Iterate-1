@@ -4,10 +4,10 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import express, { type Response } from 'express';
 import { artifact, assertDeployment, deployment } from '../../../packages/shared/src/local.js';
-import { digest } from '../../../packages/shared/src/store.js';
 import { modelConfig } from '../../../packages/llm/src/provider.js';
 import { event, publicData, runStore, type ExperimentEvent } from '../../../packages/experiment/src/events.js';
 import { SAMPLE_TASK } from '../../client/src/agent1.js';
+import { keccak256, stringToHex } from 'viem';
 const app = express(); const port = Number(process.env.DASHBOARD_PORT ?? 4030);
 const origin = `http://127.0.0.1:${port}`; const token = crypto.randomBytes(24).toString('hex');
 app.disable('x-powered-by'); app.use(express.json({ limit: '20kb' }));
@@ -20,6 +20,17 @@ app.use((req, res, next) => {
 });
 const clients = new Set<Response>();
 const known = new Set<string>(); let history: ExperimentEvent[] = []; let active: string | undefined;
+async function cardSnapshot() {
+  const config = deployment(); const chain = await assertDeployment(config);
+  const block = await chain.getBlock();
+  const contract = { address: config.agentCard, abi: artifact('AgentCard').abi, blockNumber: block.number };
+  const raw = await chain.readContract({ ...contract, functionName: 'cardJson' }) as string;
+  const enabled = await chain.readContract({ ...contract, functionName: 'active' });
+  return { card: JSON.parse(raw), active: enabled, hash: keccak256(stringToHex(raw)), address: config.agentCard, registry: config.registry, blockNumber: String(block.number) };
+}
+app.get('/api/card', async (_req, res) => {
+  try { res.json(await cardSnapshot()); } catch { res.status(503).json({ error: 'Start the local chain and fixture to load the card.' }); }
+});
 // An orphaned client run is unresolved, never automatically restarted.
 const startup = runStore();
 for (const r of Object.values(startup.state)) if (r.status === 'running') { r.status = 'unresolved'; r.error = 'Dashboard restarted; request outcome unresolved'; }

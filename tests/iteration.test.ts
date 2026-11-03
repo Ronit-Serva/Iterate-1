@@ -20,6 +20,7 @@ import { createTools, Unresolved } from '../apps/client/src/tools.js';
 import { deployment, artifact, chainClient, assertDeployment } from '../packages/shared/src/local.js';
 import { digest } from '../packages/shared/src/store.js';
 import { EXTENSION, requirements } from '../packages/shared/src/card.js';
+import { lookupAgent } from '../packages/shared/src/registry.js';
 import { publicData, type RunRecord } from '../packages/experiment/src/events.js';
 import { validateAssessment, executeSpecialist } from '../packages/llm/src/runtime.js';
 import type { Model, ChatMessage } from '../packages/llm/src/provider.js';
@@ -54,6 +55,22 @@ test('paid A2A lifecycle on an isolated local blockchain', { timeout: 150000 }, 
     const proof=async()=>{const a=privateKeyToAccount(JSON.parse(fs.readFileSync('runtime/client-key.json','utf8')).privateKey);const terms=requirements(d);const p=await new ExactEvmScheme(toClientEvmSigner(a)).createPaymentPayload(2,terms);return {x402Version:2,accepted:terms,payload:p.payload} as PaymentPayload;};
     const body=(id=crypto.randomUUID())=>({jsonrpc:'2.0',id:crypto.randomUUID(),method:'SendMessage',params:{message:{messageId:id,role:'ROLE_USER',parts:[{data:{task:SAMPLE_TASK},mediaType:'application/json'}]},configuration:{returnImmediately:true,historyLength:0}}});
     const credential=()=>crypto.randomBytes(32).toString('hex');
+    await t.test('dashboard card is read only and matches on-chain discovery',async()=>{
+      await start({file:'runtime/test-card.json'});
+      const base='http://127.0.0.1:14030';
+      const dashboard=spawn(process.execPath,['--import',pathToFileURL(path.join(root,'node_modules/tsx/dist/loader.mjs')).href,path.join(root,'apps/dashboard/src/index.ts')],{cwd:tmp,env:{...env,DASHBOARD_PORT:'14030'},stdio:'ignore'});children.push(dashboard);
+      try {
+        await until(async()=>{try{return (await fetch(base+'/api/session')).ok;}catch{return false;}},20000);
+        const original=await(await fetch(base+'/api/card')).json();
+        const session=await(await fetch(base+'/api/session')).json();
+        const found=await lookupAgent(d);
+        assert.deepEqual(original.card,found.card);assert.equal(original.hash,found.provenance.cardHash);
+        assert.equal((await(await fetch('http://127.0.0.1:4021/.well-known/agent-card.json')).json()).name,original.card.name);
+        const response=await fetch(base+'/api/card',{method:'PUT',headers:{'content-type':'application/json',origin:base,'x-session-token':session.token},body:JSON.stringify({hash:original.hash,advertisement:{name:'Changed'}})});
+        assert.equal(response.status,404);
+        assert.equal((await lookupAgent(d)).provenance.cardHash,original.hash);
+      } finally { dashboard.kill('SIGTERM');await new Promise<void>(resolve=>dashboard.once('exit',()=>resolve()));await close(); }
+    });
     async function rpc(b: unknown,c: string,p?: PaymentPayload) {return fetch('http://127.0.0.1:4021/',{method:'POST',headers:{'content-type':'application/json','a2a-version':'1.0','a2a-extensions':EXTENSION,'x-task-access':c,...(p?{'payment-signature':encodePaymentSignatureHeader(p)}:{})},body:JSON.stringify(b)});}
     await t.test('controlled models exercise real discovery, signing, SDK SendMessage/GetTask, settlement, final incorporation',async()=>{
       const svc=await start({file:'runtime/test-success.json',execute:async(req,run)=>executeSpecialist(req,run,{id:'controlled-specialist',async complete(){return {message:{role:'assistant',content:JSON.stringify(assessment)}};}})});
@@ -114,7 +131,7 @@ test('paid A2A lifecycle on an isolated local blockchain', { timeout: 150000 }, 
       await rpc(body(),credential(),p);await until(()=>Object.values(svc.gate.store.state.tasks)[0]?.phase==='execution-failed');assert.equal(settlements,0);await close();
     });
     await t.test('chain reset detection and authenticated task reads fail closed',async()=>{const svc=await start({file:'runtime/restart.json'});const c=credential();svc.gate.store.state.tasks.interrupted.credentialHash=digest(c);svc.gate.store.save();const get={jsonrpc:'2.0',id:'poll',method:'GetTask',params:{id:'interrupted'}};assert.equal((await rpc(get,c)).status,200);await chain.request({method:'evm_revert' as any,params:[checkpoint.result]} as any);await assert.rejects(()=>assertDeployment(d),/missing|Stale/);assert.equal((await rpc(get,c)).status,503);assert.equal(svc.getExecutions(),0);await close();});
-  } finally { await close(); for(const p of children.reverse())p.kill('SIGTERM');await Promise.all(children.map(p=>p.exitCode!==null?Promise.resolve():new Promise<void>(r=>p.once('exit',()=>r()))));process.chdir(root);fs.rmSync(tmp,{recursive:true,force:true}); }
+  } finally { await close(); for(const p of children.reverse())p.kill('SIGTERM');await Promise.all(children.map(p=>p.exitCode!==null||p.signalCode!==null?Promise.resolve():new Promise<void>(r=>p.once('exit',()=>r()))));process.chdir(root);fs.rmSync(tmp,{recursive:true,force:true}); }
 });
 test('output validation and public event redaction reject malformed/leaking content',()=>{
   assert.throws(()=>validateAssessment({...assessment,risks:[]}));assert.throws(()=>validateAssessment({...assessment,summary:''}));

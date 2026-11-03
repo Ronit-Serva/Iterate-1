@@ -1,6 +1,6 @@
 import express from 'express';
 import { DefaultRequestHandler, InMemoryTaskStore, type AgentExecutor } from '@a2a-js/sdk/server';
-import { agentCardHandler, jsonRpcHandler, UserBuilder } from '@a2a-js/sdk/server/express';
+import { jsonRpcHandler, UserBuilder } from '@a2a-js/sdk/server/express';
 import { deployment, assertDeployment } from '../../../packages/shared/src/local.js';
 import { readCard } from '../../../packages/shared/src/card.js';
 import { createPaymentGate, type GateOptions } from './payment-gate.js';
@@ -16,7 +16,10 @@ export async function createService(options: GateOptions = {}) {
   const sdkHandler = jsonRpcHandler({ requestHandler: handler, userBuilder: UserBuilder.noAuthentication });
   const app = express(); app.disable('x-powered-by'); app.use(express.json({ limit: '64kb' }));
   app.get('/health', async (_req, res) => { try { await assertDeployment(config); res.json({ ok: true, anchor: config.anchor, executions: gate.getExecutions(), mode: 'verify-execute-settle-release' }); } catch { res.status(503).json({ ok: false }); } });
-  app.use('/.well-known/agent-card.json', agentCardHandler({ agentCardProvider: handler }));
+  app.get('/.well-known/agent-card.json', async (_req, res) => {
+    try { res.set('Cache-Control', 'no-store').json(await readCard(config)); }
+    catch { res.status(503).json({ error: 'On-chain card unavailable' }); }
+  });
   app.post('/', gate.middleware, sdkHandler);
   app.use((_err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(400).json({ error: 'Malformed request' }));
   return { app, card, gate, getExecutions: gate.getExecutions };

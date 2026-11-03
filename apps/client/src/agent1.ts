@@ -23,10 +23,14 @@ export async function runExperiment(task = SAMPLE_TASK, id: string = crypto.rand
       const calls = reply.message.tool_calls;
       if (calls?.length) {
         if (calls.length !== 1) throw new Error('Only one tool call per turn is allowed');
-        const call = calls[0]; const result = await tools.invoke(call.function.name, JSON.parse(call.function.arguments));
+        const call = calls[0]; const args = JSON.parse(call.function.arguments);
+        event('agent1', 'agent-tool-call', id, { tool: call.function.name, input: args });
+        const result = await tools.invoke(call.function.name, args);
+        event('agent1', 'agent-tool-response', id, { tool: call.function.name, output: result });
         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
         continue;
       }
+      if (reply.message.content?.trim()) event('agent1', 'agent-text', id, { output: reply.message.content.trim() });
       if (tools.phase !== 'completed') throw new Error('Agent finished without receiving the paid specialist result');
       const output = reply.message.content?.trim();
       if (!output || output.length > 24000) throw new Error('Invalid final response');

@@ -2,6 +2,8 @@
 
 Implementation root: `/home/ronit/Blockchain-Focus/Iterate#1`.
 
+Current status: recovered and live-verified using NVIDIA Nemotron 3.5 Lightning for both agents. See the final follow-up below; earlier model failures and successes are historical records.
+
 The approved architecture is implemented as a project-owned modified copy of Build. Build remains unchanged. Installed dependencies are pinned in this root. Obsolete baseline paths are archived in `reference/`; they are not active entrypoints.
 
 | Requirement | Implementation |
@@ -49,3 +51,27 @@ Artifacts:
 - `evidence/1952114e-8a8d-4082-bbbe-996ffd31cdfe-failure-verified.json` — separate real-model execution failure with unused nonce/no payment.
 
 Final checks: 11 automated checks passed; strict TypeScript and dashboard JavaScript syntax passed; local compilation passed; dashboard API/static/SSE/session checks passed; key permissions and secret-leak scan passed. No browser surface is available, so rendered desktop/mobile visual QA and interactive browser walkthrough remain unverified. The running dashboard contains the actual live run and historical failures. No mocked run has been presented as live success.
+
+## Model-call failure diagnosis — 2026-10-30
+
+The two reported runs (`9c9d3811-e4fa-446f-ae4d-644ec7270f81` and `5a35d667-c948-424e-b403-77b3d72e8360`) both stopped on Agent 1's first model request after 90,002 ms, before discovery, signing, Task creation or payment. These were model inference failures, not A2A polling or settlement failures.
+
+A concrete compatibility defect was found: `.env` and the example selected `LLM_REASONING_EFFORT=low`, while the current NVIDIA Mistral Large 4 recipe documents only `none` and `high`. The adapter's old generic validator rejected the valid `none` value. The local configuration and example now use `none`; the NVIDIA/Mistral-specific validator fails immediately on `low`/`medium` and defaults to `none` when unset. `high` mode now preserves the required reasoning continuation privately in a per-model WeakMap, without adding it to public messages, tool results, events, or evidence. Reference: https://docs.api.nvidia.com/nim/reference/mistralai-mistral-large-4-1t-a52b-infer
+
+There is also a current external inference problem: HEAD returns 405, an unauthenticated POST returns 401, and model discovery returns 200 listing the selected model, all promptly. The original authenticated inference request times out through both native fetch and curl. Corrected minimal requests with `reasoning_effort=none` and with the reasoning field omitted also stalled; a valid minimal `none` request received no response within 120 seconds. One actual-adapter probe returned HTTP 400 after approximately 89 seconds, but its original generic error handling discarded the provider body, so its specific validation reason is not established. Model-list success establishes endpoint reachability/listing, not inference readiness or account entitlement. The configuration defect is fixed, but a new successful cloud inference/live run cannot presently be claimed. The previous day's verified run remains historical evidence only.
+
+Diagnostics now distinguish timeouts before headers, connection failures, rejected credentials, rate limits, API-credit errors and request-parameter errors. HTTP failures record a safe provider request ID when available, without recording provider bodies. The 90-second production timeout and no-automatic-retry policy remain in place. No payment was created by these diagnostic probes.
+
+Validation after the fix: strict TypeScript passed; all 13 regression checks passed, including new reasoning-mode validation, private reasoning continuation, and sanitized HTTP-422 diagnostics; dashboard/static/SSE/session checks and secret-leak scan passed. The local test stack was restarted with the corrected configuration. Failed run records were retained and were not resumed.
+
+## Follow-up recovery — NVIDIA model replacement
+
+After the reported timeout for run `0164b039-d53c-4c24-9efa-3a102b8a636a`, the user authorized switching both agents to a tested working NVIDIA model. The same endpoint and credential successfully served `nvidia/nemotron-3.5-lightning-30b-a3b`, including a real function call in 1.4 seconds and structured JSON in 1.6 seconds. This isolates the observed timeout to the configured Mistral inference service/request path, rather than the local chain, A2A transport, or all NVIDIA inference access. No specific internal cause inside NVIDIA's Mistral deployment is claimed.
+
+Both agents are now configured for Nemotron Lightning. Its documented `reasoning_budget` is capped at 128 tokens, rather than sending Mistral's `reasoning_effort`. The completion budget stays 4,096 tokens and the production timeout remains 90 seconds. The adapter validates these model-specific settings and preserves reasoning only as private provider continuation state. There is no automatic model failover, payment resubmission or retry of old failed runs.
+
+A fresh real-LLM experiment `c5d54f90-c9fc-4df7-a2d3-d304811633a6` completed and passed `npm run verify` against 54 correlated events. Task ID: `a8fd0c74-79e8-4263-ad83-387dee070e31`. Transaction: `0xa05ba82fbcaaeee76476dc1ba4e9380668a98f813ad6d94dde1a2f2fea9d5bf7`. Balances changed from 100/0 to 98/2 TestUSD, with execution and private staging before settlement, confirmed payment before delivery, normal GetTask polling, and final synthesis by Agent 1. Model calls took 0.6–7.3 seconds. Evidence: `evidence/c5d54f90-c9fc-4df7-a2d3-d304811633a6-verified.json` and `evidence/iteration-1-result.json`.
+
+All 14 regression checks, strict TypeScript, dashboard service/static/SSE/session checks, and the secret-leak scan passed. The dashboard is running at http://127.0.0.1:4030 with the replacement model loaded.
+
+Provider budget reference: https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-5-lightning-30b-a3b-infer

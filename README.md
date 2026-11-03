@@ -16,7 +16,7 @@ Open **http://127.0.0.1:4030**. The dashboard shows both agents, model-call dura
 
 `npm start` compiles contracts, owns a fresh chain on 8545, creates fresh local client/facilitator keys, deploys TestUSD/AgentCard/AgentRegistry, starts the facilitator on 4022, Agent 2 on 4021, and dashboard on 4030. It refuses occupied ports. Ctrl+C stops its owned services. Each new startup creates a new fixture; previous evidence is historical and does not verify against a replacement chain.
 
-Cloud defaults are `https://integrate.api.nvidia.com/v1` and `mistralai/mistral-large-4-1t-a52b` for both agents. `AGENT1_MODEL` and `AGENT2_MODEL` override `LLM_MODEL`; `LLM_API_KEY` overrides `NVIDIA_API_KEY`. Credentials stay in server processes, never in browser responses or either model's tool transcript. The adapter uses OpenAI-compatible `/chat/completions`, temperature 1 and top-p .95, without a fixed seed. Models must support function tools for Agent 1. The selected model uses `LLM_REASONING_EFFORT=low`. Calls are bounded to 90 seconds and 4,096 output tokens (`LLM_MAX_TOKENS`, constrained to 256–8,192); refusal, truncation and malformed specialist output fail closed. No model-call repair/retry occurs automatically.
+Cloud defaults are `https://integrate.api.nvidia.com/v1` and `nvidia/nemotron-3.5-lightning-30b-a3b` for both agents. `AGENT1_MODEL` and `AGENT2_MODEL` override `LLM_MODEL`; `LLM_API_KEY` overrides `NVIDIA_API_KEY`. Credentials stay in server processes, never in browser responses or either model's tool transcript. The adapter uses OpenAI-compatible `/chat/completions`, temperature 1 and top-p .95, without a fixed seed. Models must support function tools for Agent 1. The selected Nemotron model uses `LLM_REASONING_BUDGET=128`; leave `LLM_REASONING_EFFORT` empty. This caps internal reasoning while preserving answer/tool output capacity. If switching back to NVIDIA Mistral Large 4, use `none` or `high` (not `low`/`medium`). Provider reasoning continuation stays private in memory and is excluded from returned messages, tool results, events and evidence. Calls are bounded to 90 seconds and 4,096 output tokens (`LLM_MAX_TOKENS`, constrained to 256–8,192); refusal, truncation and malformed specialist output fail closed. No model-call repair/retry occurs automatically.
 
 For individual services, with a running compatible local chain:
 
@@ -46,6 +46,10 @@ Task reads require the host-generated, request-bound `X-Task-Access` credential.
 
 Execution failure, invalid output, or expiry before settlement never calls `/settle`. Settlement failure withholds the result. A lost acknowledgement, polling timeout, unknown settlement response, or restart is reported as **unresolved**. There is no `inspect_request_status`, automatic recovery, resubmission, new authorization, or restarted execution. A polling timeout does not cancel the server: a valid accepted task may still finish and settle; its client run remains unresolved. An issued EIP-3009 authorization remains cryptographically valid until used/expired even when this framework declines to submit it.
 
+## Viewing the server's on-chain AgentCard
+
+Open **Agent 2 · On-chain AgentCard** in the dashboard to view the deployed card, contract address, registry, block number, active flag and content hash. **Refresh card** reads it again from the local chain. The field guide explains its identity, advertised skills, protocol capabilities, payment terms and security metadata. The dashboard provides read-only access to the card.
+
 ## Verification
 
 Stop the experiment services before running the integration suite, which uses ports 4021/4022 and a separate temporary Hardhat chain on 18545:
@@ -72,4 +76,4 @@ This root is an independent modified copy of authored code from `../Build`, incl
 
 Streaming, push, cancellation, multi-turn sessions, remote chains, arbitrary payees/prices, recovery and withdrawal workflows are outside this iteration. Public history is limited to 2,500 events in the dashboard; source journals retain events by process. Ordering is causal within each source; wall-clock ordering across processes is only a display aid.
 
-Provider reference: [NVIDIA Mistral Large 4 API example](https://build.nvidia.com/mistralai/mistral-large-4-1t-a52b).
+Provider reference: [NVIDIA Nemotron Lightning inference API](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-5-lightning-30b-a3b-infer).
